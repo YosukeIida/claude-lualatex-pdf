@@ -378,6 +378,36 @@ def _insert_soft_breaks_for_table_tokens(text: str) -> str:
     return "\n".join(result)
 
 
+_MATH_SYMBOLS = [
+    ("≤", r"$\leq$"),
+    ("≥", r"$\geq$"),
+    ("≠", r"$\neq$"),
+    ("→", r"$\rightarrow$"),
+    ("←", r"$\leftarrow$"),
+    ("×", r"$\times$"),
+    ("÷", r"$\div$"),
+    ("≈", r"$\approx$"),
+    ("±", r"$\pm$"),
+]
+
+
+def _replace_math_symbols(text: str) -> str:
+    """LuaLaTeX テキストフォントに含まれない数学記号を LaTeX math コマンドに置換する。
+
+    backtick コードスパン内はスキップ（verbatim 環境でコマンドがリテラルになるため）。
+    """
+    segments = re.split(r"(`[^`\n]+`)", text)
+    result = []
+    for idx, seg in enumerate(segments):
+        if idx % 2 == 1:
+            result.append(seg)
+        else:
+            for char, cmd in _MATH_SYMBOLS:
+                seg = seg.replace(char, cmd)
+            result.append(seg)
+    return "".join(result)
+
+
 def _insert_cjk_linebreaks(text: str) -> str:
     """連続する CJK 文字の間に \\hskip0pt を挿入する。
 
@@ -702,6 +732,8 @@ def _render_lualatex(md_file: str, pdf_file: str) -> None:
     md_content = _ensure_hr_spacing(md_content)
     # _ensure_list_spacing: リスト前の空行補完
     md_content = _ensure_list_spacing(md_content)
+    # テキストフォント非対応の数学記号を LaTeX math コマンドに置換
+    md_content = _replace_math_symbols(md_content)
     # 表のセパレータ行ダッシュ数をコンテンツ幅に比例させる（pandoc の \real{} 列幅計算に影響）
     md_content = _adjust_table_column_widths(md_content)
     # 長い ASCII 連続トークン（16進ファイル名等）にゼロ幅スペースを挿入して折り返しを許可
