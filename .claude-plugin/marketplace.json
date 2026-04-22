@@ -1,0 +1,22 @@
+{
+  "name": "YosukeIida",
+  "owner": {
+    "name": "YosukeIida",
+    "email": "95607264+YosukeIida@users.noreply.github.com"
+  },
+  "metadata": {
+    "description": "Personal Claude Code plugins by YosukeIida"
+  },
+  "plugins": [
+    {
+      "name": "lualatex-pdf",
+      "description": "Markdown to PDF via pandoc + LuaLaTeX + Eisvogel template with Japanese/CJK support",
+      "source": "./",
+      "strict": false,
+      "version": "2.0.0",
+      "category": "document-tools",
+      "keywords": ["pdf", "lualatex", "japanese", "markdown", "cjk", "eisvogel"],
+      "skills": ["skills/lualatex-pdf"]
+    }
+  ]
+}
