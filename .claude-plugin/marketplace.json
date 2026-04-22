@@ -10,7 +10,7 @@
     {
       "name": "lualatex-pdf",
       "description": "Markdown to PDF via pandoc + LuaLaTeX + Eisvogel template with Japanese/CJK support",
-      "source": "skills/lualatex-pdf",
+      "source": "./skills/lualatex-pdf",
       "strict": false,
       "version": "2.0.0",
       "category": "document-tools",
