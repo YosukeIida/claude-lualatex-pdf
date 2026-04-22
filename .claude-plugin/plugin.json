@@ -1,11 +1,10 @@
 {
-  "name": "claude-lualatex-pdf",
+  "name": "lualatex-pdf",
   "version": "2.0.0",
   "description": "Markdown to PDF via pandoc + LuaLaTeX + Eisvogel template with Japanese/CJK support",
   "author": {
     "name": "YosukeIida"
   },
   "keywords": ["pdf", "lualatex", "japanese", "markdown", "cjk", "eisvogel"],
-  "category": "document-tools",
-  "skills": ["skills/lualatex-pdf"]
+  "skills": ["./skills/lualatex-pdf"]
 }
