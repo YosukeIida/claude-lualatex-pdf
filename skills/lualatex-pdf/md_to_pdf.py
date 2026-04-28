@@ -62,8 +62,6 @@ _TABLE_HEADER_TEX = r"""\usepackage{graphicx}
   \hyphenpenalty=10000\exhyphenpenalty=10000}
 \sloppy
 \setlength{\emergencystretch}{3em}
-% Menlo は CJK 非対応のため，等幅フォントに Hiragino をフォールバック指定して豆腐を防ぐ
-\setmonofont{Menlo}[Scale=MatchLowercase,FallbackFont={Hiragino Kaku Gothic ProN}]
 """
 
 
@@ -241,6 +239,34 @@ def _insert_cjk_linebreaks(text: str) -> str:
     )
 
 
+def _strip_cjk_backticks_in_table_cells(md: str) -> str:
+    """表セル内で CJK 文字を含むバッククォートスパンのバッククォートを除去する.
+
+    Menlo 等の等幅フォントは CJK 非対応のため，日本語を含むコードスパンが
+    あると豆腐になる．バッククォートを除去してプロポーショナルフォント
+    （Hiragino 等）でレンダリングさせることで豆腐を防ぐ．
+    セパレータ行（|---|---| 形式）は処理しない．
+    """
+    def _has_cjk(s: str) -> bool:
+        return any(
+            0x3000 <= ord(c) <= 0x9FFF
+            or 0xF900 <= ord(c) <= 0xFAFF
+            or 0xFF00 <= ord(c) <= 0xFFEF
+            for c in s
+        )
+
+    def _strip_if_cjk(m: re.Match) -> str:
+        content = m.group(1)
+        return content if _has_cjk(content) else m.group(0)
+
+    result = []
+    for line in md.split("\n"):
+        if "|" in line and not re.match(r"\s*\|[-:\s|]+\|\s*$", line.strip()):
+            line = re.sub(r"`([^`\n]+)`", _strip_if_cjk, line)
+        result.append(line)
+    return "\n".join(result)
+
+
 def _preprocess_pdf_links_for_latex(text: str) -> str:
     """[text](path.pdf) → ![text](path.pdf) に変換する.
 
@@ -398,6 +424,7 @@ def _render(md_file: str, pdf_file: str) -> None:
     md_content = _ensure_list_spacing(md_content)
     md_content = _adjust_table_column_widths(md_content)
     md_content = _insert_table_long_token_breaks(md_content)
+    md_content = _strip_cjk_backticks_in_table_cells(md_content)
     md_content = _insert_cjk_linebreaks(md_content)
     md_content = _preprocess_pdf_links_for_latex(md_content)
 
