@@ -72,10 +72,28 @@ lualatex-pdf/
 
 ## Requirements
 
+### Nix / direnv
+
+対象 repo の `nix/flake.nix` の `packages` に以下を追加する:
+
+```nix
+pkgs.pandoc
+pkgs.texlive.combined.scheme-medium
+```
+
+`pkgs.texlive.combined.scheme-medium` には `lualatex`, `latexmk`, `tlmgr` が含まれる。
+Eisvogel テンプレートで LaTeX パッケージ不足が出る場合は、切り分け用に
+`pkgs.texlive.combined.scheme-full` を使う。
+
+### Homebrew
+
 ```bash
 brew install pandoc
-brew install --cask mactex-no-gui   # または basictex
+brew install --cask mactex-no-gui
 ```
+
+軽量にしたい場合は `mactex-no-gui` の代わりに `basictex` も使えるが、
+LaTeX パッケージ不足が出ることがあるため `mactex-no-gui` を推奨する。
 
 ## Troubleshooting
 
@@ -83,7 +101,9 @@ brew install --cask mactex-no-gui   # または basictex
 
 **表がはみ出す**: pandoc 3.7+ 必須（`brew upgrade pandoc`）
 
-**lualatex が見つからない**: `which lualatex` で確認，なければ MacTeX をインストール
+**pandoc が見つからない**: `which pandoc` で確認。Nix/devshell の場合は `direnv allow` 済みか確認
+
+**lualatex が見つからない**: `which lualatex` で確認。Nix なら `pkgs.texlive.combined.scheme-medium`、Homebrew なら MacTeX をインストール
 
 ## License / Attribution
 

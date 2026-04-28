@@ -23,6 +23,7 @@ Requirements:
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import shutil
 import subprocess
@@ -321,6 +322,42 @@ def _tex_fix_table_columns(tex: str) -> str:
     )
 
 
+# ─── フォント DB ──────────────────────────────────────────────────────────────
+
+def _writable_texmfvar() -> Path | None:
+    """書き込み可能な TEXMFVAR を返す.
+
+    デフォルトの TEXMFVAR が書き込める環境（MacTeX 等）では None を返し，
+    既存の設定をそのまま使う．Nix 等で書き込めない場合は $TMPDIR 下の
+    固定パスを返す．
+    """
+    existing = os.environ.get("TEXMFVAR", "")
+    if existing:
+        p = Path(existing)
+        if p.exists() and os.access(p, os.W_OK):
+            return None
+    fallback = Path(tempfile.gettempdir()) / "claude-lualatex-texmf-var"
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback
+
+
+def _ensure_luaotfload_cache(texmf_var: Path) -> None:
+    """フォント DB が未構築なら luaotfload-tool で構築する.
+
+    同一セッション内では再構築しない（DB ファイルが存在すればスキップ）．
+    """
+    names_dir = texmf_var / "luatex-cache" / "generic" / "names"
+    if names_dir.exists() and any(names_dir.glob("luaotfload-names*.luc")):
+        return
+    env = {**os.environ, "TEXMFVAR": str(texmf_var)}
+    subprocess.run(
+        ["luaotfload-tool", "--update", "--force"],
+        env=env,
+        capture_output=True,
+        timeout=120,
+    )
+
+
 # ─── レンダリング ─────────────────────────────────────────────────────────────
 
 def _render(md_file: str, pdf_file: str) -> None:
@@ -404,6 +441,14 @@ def _render(md_file: str, pdf_file: str) -> None:
         tex_file.write_text(tex_content, encoding="utf-8")
 
         # Step 3: lualatex を 2 回実行（相互参照解決）
+        # Nix 等で fontconfig のキャッシュ書き込み先がない場合に備え，
+        # TEXMFVAR を書き込み可能なディレクトリに向けてフォント DB を確保する．
+        texmf_var = _writable_texmfvar()
+        lualatex_env = os.environ.copy()
+        if texmf_var is not None:
+            _ensure_luaotfload_cache(texmf_var)
+            lualatex_env["TEXMFVAR"] = str(texmf_var)
+
         for _ in range(2):
             r2 = subprocess.run(
                 [
@@ -413,6 +458,7 @@ def _render(md_file: str, pdf_file: str) -> None:
                     str(tex_file),
                 ],
                 capture_output=True, text=True, cwd=str(work_dir),
+                env=lualatex_env,
             )
 
         out_pdf = tex_file.with_suffix(".pdf")
