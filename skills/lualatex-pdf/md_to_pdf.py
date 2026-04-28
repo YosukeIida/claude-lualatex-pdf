@@ -62,6 +62,8 @@ _TABLE_HEADER_TEX = r"""\usepackage{graphicx}
   \hyphenpenalty=10000\exhyphenpenalty=10000}
 \sloppy
 \setlength{\emergencystretch}{3em}
+% Menlo は CJK 非対応のため，等幅フォントに Hiragino をフォールバック指定して豆腐を防ぐ
+\setmonofont{Menlo}[Scale=MatchLowercase,FallbackFont={Hiragino Kaku Gothic ProN}]
 """
 
 
