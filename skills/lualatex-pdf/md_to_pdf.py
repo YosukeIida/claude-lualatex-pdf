@@ -67,10 +67,30 @@ _TABLE_HEADER_TEX = r"""\usepackage{graphicx}
 
 # ─── Markdown 前処理 ──────────────────────────────────────────────────────────
 
+def _split_frontmatter(md: str) -> tuple[str, str]:
+    """YAML frontmatter と本文を分割して返す.
+
+    冒頭が `---` で始まり，次の `---` または `...` で終わるブロックを
+    frontmatter として扱う．frontmatter がなければ ("", md) を返す．
+    """
+    lines = md.split("\n")
+    if not lines or lines[0].strip() != "---":
+        return "", md
+    for j in range(1, len(lines)):
+        if lines[j].strip() in ("---", "..."):
+            frontmatter = "\n".join(lines[: j + 1]) + "\n"
+            body = "\n".join(lines[j + 1 :])
+            return frontmatter, body
+    return "", md
+
+
 def _ensure_hr_spacing(text: str) -> str:
-    """--- の前後に空行を挿入する（setext 見出し誤認識防止）."""
+    """--- の前後に空行を挿入する（setext 見出し誤認識防止）.
+
+    本文のみを受け取る前提（frontmatter は _split_frontmatter で除去済み）．
+    """
     lines = text.split("\n")
-    result = []
+    result: list[str] = []
     hr_re = re.compile(r"^---+$")
     for i, line in enumerate(lines):
         if hr_re.match(line):
@@ -246,8 +266,8 @@ def _strip_cjk_backticks(md: str) -> str:
     あると豆腐になる．バッククォートを除去してプロポーショナルフォント
     （Hiragino 等）でレンダリングさせることで豆腐を防ぐ．
 
-    表セルだけでなく，段落・リスト・見出し等すべての行を対象とする．
-    YAML frontmatter ブロック（--- で囲まれた冒頭部）はスキップする．
+    本文のみを受け取る前提（frontmatter は _split_frontmatter で除去済み）．
+    表のセパレータ行（|---|---|）はスキップする．
     """
     def _has_cjk(s: str) -> bool:
         return any(
@@ -261,31 +281,12 @@ def _strip_cjk_backticks(md: str) -> str:
         content = m.group(1)
         return content if _has_cjk(content) else m.group(0)
 
-    lines = md.split("\n")
     result: list[str] = []
-
-    # YAML frontmatter をスキップ（冒頭の --- ブロック）
-    in_frontmatter = False
-    frontmatter_done = False
-    for i, line in enumerate(lines):
-        if i == 0 and line.strip() == "---":
-            in_frontmatter = True
-            result.append(line)
-            continue
-        if in_frontmatter:
-            result.append(line)
-            if line.strip() in ("---", "..."):
-                in_frontmatter = False
-                frontmatter_done = True
-            continue
-
-        # セパレータ行（|---|---|）はスキップ
+    for line in md.split("\n"):
         if re.match(r"\s*\|[-:\s|]+\|\s*$", line.strip()):
             result.append(line)
-            continue
-
-        result.append(re.sub(r"`([^`\n]+)`", _strip_if_cjk, line))
-
+        else:
+            result.append(re.sub(r"`([^`\n]+)`", _strip_if_cjk, line))
     return "\n".join(result)
 
 
@@ -439,16 +440,20 @@ def _render(md_file: str, pdf_file: str) -> None:
     work_dir = md_path.parent
 
     # Markdown 前処理
+    # YAML frontmatter を本文と分離し，本文のみに各変換を適用する．
+    # frontmatter に LaTeX コマンドや空行が混入すると pandoc の YAML パーサーが失敗するため．
     md_content = md_path.read_text(encoding="utf-8")
+    frontmatter, body = _split_frontmatter(md_content)
     for sym, latex in _LATEX_SYMBOL_MAP.items():
-        md_content = md_content.replace(sym, latex)
-    md_content = _ensure_hr_spacing(md_content)
-    md_content = _ensure_list_spacing(md_content)
-    md_content = _adjust_table_column_widths(md_content)
-    md_content = _insert_table_long_token_breaks(md_content)
-    md_content = _strip_cjk_backticks(md_content)
-    md_content = _insert_cjk_linebreaks(md_content)
-    md_content = _preprocess_pdf_links_for_latex(md_content)
+        body = body.replace(sym, latex)
+    body = _ensure_hr_spacing(body)
+    body = _ensure_list_spacing(body)
+    body = _adjust_table_column_widths(body)
+    body = _insert_table_long_token_breaks(body)
+    body = _strip_cjk_backticks(body)
+    body = _insert_cjk_linebreaks(body)
+    body = _preprocess_pdf_links_for_latex(body)
+    md_content = frontmatter + body
 
     # 一時ファイルを work_dir に作成（pandoc の --resource-path が機能するよう）
     stem = Path(tempfile.mktemp(suffix="", dir=str(work_dir))).name
@@ -467,7 +472,7 @@ def _render(md_file: str, pdf_file: str) -> None:
                 "pandoc", str(tmp_md),
                 "-o", str(tex_file),
                 "--pdf-engine=lualatex",
-                "-f", "markdown-yaml_metadata_block",
+                "-f", "markdown",
                 "-s",
                 "--template", str(TEMPLATE_PATH),
                 "-V", "mainfont=Hiragino Mincho ProN",
