@@ -239,13 +239,15 @@ def _insert_cjk_linebreaks(text: str) -> str:
     )
 
 
-def _strip_cjk_backticks_in_table_cells(md: str) -> str:
-    """表セル内で CJK 文字を含むバッククォートスパンのバッククォートを除去する.
+def _strip_cjk_backticks(md: str) -> str:
+    """CJK 文字を含むバッククォートスパンのバッククォートを全コンテキストで除去する.
 
     Menlo 等の等幅フォントは CJK 非対応のため，日本語を含むコードスパンが
     あると豆腐になる．バッククォートを除去してプロポーショナルフォント
     （Hiragino 等）でレンダリングさせることで豆腐を防ぐ．
-    セパレータ行（|---|---| 形式）は処理しない．
+
+    表セルだけでなく，段落・リスト・見出し等すべての行を対象とする．
+    YAML frontmatter ブロック（--- で囲まれた冒頭部）はスキップする．
     """
     def _has_cjk(s: str) -> bool:
         return any(
@@ -259,11 +261,31 @@ def _strip_cjk_backticks_in_table_cells(md: str) -> str:
         content = m.group(1)
         return content if _has_cjk(content) else m.group(0)
 
-    result = []
-    for line in md.split("\n"):
-        if "|" in line and not re.match(r"\s*\|[-:\s|]+\|\s*$", line.strip()):
-            line = re.sub(r"`([^`\n]+)`", _strip_if_cjk, line)
-        result.append(line)
+    lines = md.split("\n")
+    result: list[str] = []
+
+    # YAML frontmatter をスキップ（冒頭の --- ブロック）
+    in_frontmatter = False
+    frontmatter_done = False
+    for i, line in enumerate(lines):
+        if i == 0 and line.strip() == "---":
+            in_frontmatter = True
+            result.append(line)
+            continue
+        if in_frontmatter:
+            result.append(line)
+            if line.strip() in ("---", "..."):
+                in_frontmatter = False
+                frontmatter_done = True
+            continue
+
+        # セパレータ行（|---|---|）はスキップ
+        if re.match(r"\s*\|[-:\s|]+\|\s*$", line.strip()):
+            result.append(line)
+            continue
+
+        result.append(re.sub(r"`([^`\n]+)`", _strip_if_cjk, line))
+
     return "\n".join(result)
 
 
@@ -424,7 +446,7 @@ def _render(md_file: str, pdf_file: str) -> None:
     md_content = _ensure_list_spacing(md_content)
     md_content = _adjust_table_column_widths(md_content)
     md_content = _insert_table_long_token_breaks(md_content)
-    md_content = _strip_cjk_backticks_in_table_cells(md_content)
+    md_content = _strip_cjk_backticks(md_content)
     md_content = _insert_cjk_linebreaks(md_content)
     md_content = _preprocess_pdf_links_for_latex(md_content)
 
