@@ -202,6 +202,8 @@ def _insert_table_long_token_breaks(md: str) -> str:
             return token
         if any(ord(c) > 0x2E7F for c in token):
             return token
+        if "\\" in token:
+            return token  # LaTeX コマンド（\ensuremath 等）は分割しない
         return ZWSP.join(token[i:i + CHUNK] for i in range(0, len(token), CHUNK))
 
     def _process_text(text: str) -> str:
@@ -294,13 +296,17 @@ def _preprocess_pdf_links_for_latex(text: str) -> str:
     """[text](path.pdf) → ![text](path.pdf) に変換する.
 
     LaTeX は \\includegraphics で PDF を直接埋め込めるため PNG 変換は不要.
-    リモート URL はスキップする.
+    リモート URL とファイルパスリンク（テキストに / を含む）はスキップする．
+    ファイルパスリンクは図の埋め込みではなくナビゲーション用リンクのため除外する．
     """
     link_re = re.compile(r"(?<!!)\[([^\]]*)\]\((.+?\.pdf)\)", re.IGNORECASE)
 
     def _to_image(m: re.Match) -> str:
         alt, path = m.group(1), m.group(2)
         if path.startswith(("http://", "https://")):
+            return m.group(0)
+        # リンクテキストがファイルパス（/ を含む）の場合はナビゲーション用リンクとみなしスキップ
+        if "/" in alt or "\\" in alt:
             return m.group(0)
         return f"![{alt}]({path})"
 
