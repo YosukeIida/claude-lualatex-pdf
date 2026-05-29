@@ -26,8 +26,8 @@ author: 著者名
 date: 2026-04-22
 lang: ja
 
-# タイトルページ（Nix/scheme-medium では pagecolor.sty がないため false にする）
-titlepage: false
+# タイトルページ
+titlepage: true
 
 # 目次
 toc: true
@@ -58,13 +58,6 @@ code-block-font-size: '\footnotesize'
 code-block-font-size: "\\footnotesize"
 ```
 
-**`titlepage: true` は Nix/scheme-medium では使えない**
-
-Eisvogel のタイトルページは `pagecolor.sty` を必要とするが，
-`pkgs.texlive.combined.scheme-medium` には含まれない．
-タイトルページが必要な場合は `scheme-full` に切り替えるか，
-タイトル情報を本文冒頭に手書きする．
-
 ## ファイル構成
 
 ```
@@ -92,7 +85,7 @@ lualatex-pdf/
 
 **日本語をコードスパンで囲む必要はない**
 
-Menlo（等幅フォント）は CJK 非対応のため，バッククォートで囲んだ日本語は豆腐（□）になる．
+Inconsolata（等幅フォント）は CJK 非対応のため，バッククォートで囲んだ日本語は豆腐（□）になる．
 スクリプトが自動的にバッククォートを除去するが，そもそも書かないのが最善．
 
 ```markdown
@@ -125,40 +118,26 @@ Markdown 中に `≥` `≤` `≠` をそのまま書けば，スクリプトが 
 
 ## Requirements
 
-### Nix / direnv
+Docker Desktop がインストールされていれば動作する（pandoc・lualatex のローカルインストール不要）．
 
-対象 repo の `nix/flake.nix` の `packages` に以下を追加する:
+初回実行時に `texlive/texlive:latest`（arm64 native）をベースにした専用イメージ
+`claudeskill-lualatex-pdf:latest` を自動ビルドする（数分かかる）．
+以降はキャッシュされるため即時起動する．
 
-```nix
-pkgs.pandoc
-pkgs.texlive.combined.scheme-medium
-```
-
-`pkgs.texlive.combined.scheme-medium` には `lualatex`, `latexmk`, `tlmgr` が含まれる。
-Eisvogel テンプレートで LaTeX パッケージ不足が出る場合は、切り分け用に
-`pkgs.texlive.combined.scheme-full` を使う。
-
-### Homebrew
-
-```bash
-brew install pandoc
-brew install --cask mactex-no-gui
-```
-
-軽量にしたい場合は `mactex-no-gui` の代わりに `basictex` も使えるが、
-LaTeX パッケージ不足が出ることがあるため `mactex-no-gui` を推奨する。
+`md_to_pdf.py` は標準ライブラリのみで動作するため Python 依存も不要．
 
 ## Troubleshooting
 
-**日本語が豆腐（□）**: Hiragino フォントが必要（macOS 標準搭載）
+**日本語が豆腐（□）**: `claudeskill-lualatex-pdf:latest` イメージが正しくビルドされているか確認．
+`docker run --rm claudeskill-lualatex-pdf:latest fc-list | grep IPAex` でフォントを確認する
 
-**表がはみ出す**: pandoc 3.7+ 必須（`brew upgrade pandoc`）
+**表がはみ出す**: pandoc 3.7+ が必要（自動ビルドイメージに含まれる pandoc のバージョンを確認）
 
-**pandoc が見つからない**: `which pandoc` で確認。Nix/devshell の場合は `direnv allow` 済みか確認
+**Docker が見つからない**: `which docker` で確認．Docker Desktop が起動しているか確認
 
-**lualatex が見つからない**: `which lualatex` で確認。Nix なら `pkgs.texlive.combined.scheme-medium`、Homebrew なら MacTeX をインストール
+**イメージの再ビルドが必要な場合**: `docker rmi claudeskill-lualatex-pdf:latest` で削除すると次回実行時に再ビルドされる
 
-**`pagecolor.sty not found`**: Nix の `scheme-medium` には含まれない．frontmatter で `titlepage: false` にする
+**`pagecolor.sty not found`**: `texlive/texlive:latest` は TeX Live フルインストールなので発生しないはず
 
 **YAML parse error（unknown escape character）**: frontmatter で LaTeX コマンドをダブルクォートで書いている場合に発生．シングルクォートに変更する（`'\footnotesize'`）
 

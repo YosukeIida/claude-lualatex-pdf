@@ -16,14 +16,12 @@ Markdown ファイルの YAML frontmatter で制御する:
     ---
 
 Requirements:
-    pandoc (brew install pandoc)
-    lualatex (brew install --cask mactex-no-gui)
+    docker (Docker Desktop)
 """
 
 from __future__ import annotations
 
 import argparse
-import os
 import re
 import shutil
 import subprocess
@@ -33,8 +31,19 @@ from pathlib import Path
 
 PLUGIN_DIR = Path(__file__).resolve().parent
 TEMPLATE_PATH = PLUGIN_DIR / "eisvogel.latex"
+_DOCKER_IMAGE = "claudeskill-lualatex-pdf:latest"
+_CONTAINER_WORK = "/workspace"
+_CONTAINER_PLUGIN = "/plugin"
 
-# Hiragino フォントが持たない Unicode 記号を LaTeX コマンドに変換
+# texlive/texlive:latest (arm64 native) + pandoc + IPAex フォント
+_DOCKERFILE = """\
+FROM texlive/texlive:latest
+RUN apt-get update \\
+ && apt-get install -y --no-install-recommends pandoc fonts-ipaexfont \\
+ && rm -rf /var/lib/apt/lists/*
+"""
+
+# IPAex フォントが持たない Unicode 記号を LaTeX コマンドに変換
 _LATEX_SYMBOL_MAP = {
     "≤": r"\ensuremath{\leq}",
     "≥": r"\ensuremath{\geq}",
@@ -49,6 +58,8 @@ _LATEX_SYMBOL_MAP = {
 
 # 表サイズ・折り返し調整ヘッダー（Eisvogel の longtable スタイルを補完）
 _TABLE_HEADER_TEX = r"""\usepackage{graphicx}
+% コードブロック内の CJK 文字を表示するため monofont を IPAexGothic に上書き
+\setmonofont{IPAexGothic}
 \setkeys{Gin}{width=\linewidth,height=0.8\textheight,keepaspectratio}
 \usepackage{array}
 \usepackage{etoolbox}
@@ -236,7 +247,9 @@ def _insert_cjk_linebreaks(text: str) -> str:
 
     luatexja なし環境では CJK 文字列が 1 語として扱われ p{} 列をはみ出す.
     ゼロ幅スキップを挿入することで任意位置での折り返しを許可する.
-    backtick コードスパン内はスキップ（\hskip0pt がリテラル文字列になるため）.
+    フェンスドコードブロック（``` ... ```）内はスキップする（LaTeX verbatim 環境で
+    \hskip0pt がリテラル文字列として表示されるため）．
+    backtick コードスパン内はスキップ（同様の理由）.
     """
     def _process_segment(seg: str) -> str:
         result: list[str] = []
@@ -254,19 +267,32 @@ def _insert_cjk_linebreaks(text: str) -> str:
             prev_cjk = is_cjk
         return "".join(result)
 
-    segments = re.split(r"(`[^`\n]+`)", text)
-    return "".join(
-        seg if idx % 2 == 1 else _process_segment(seg)
-        for idx, seg in enumerate(segments)
-    )
+    lines = text.split("\n")
+    result_lines: list[str] = []
+    in_fence = False
+    for line in lines:
+        if re.match(r"^```", line.strip()):
+            in_fence = not in_fence
+            result_lines.append(line)
+            continue
+        if in_fence:
+            result_lines.append(line)
+            continue
+        # backtick スパンと $...$ インライン数式をスキップ
+        segments = re.split(r"(`[^`\n]+`|\$[^\$\n]+\$)", line)
+        result_lines.append("".join(
+            seg if idx % 2 == 1 else _process_segment(seg)
+            for idx, seg in enumerate(segments)
+        ))
+    return "\n".join(result_lines)
 
 
 def _strip_cjk_backticks(md: str) -> str:
     """CJK 文字を含むバッククォートスパンのバッククォートを全コンテキストで除去する.
 
-    Menlo 等の等幅フォントは CJK 非対応のため，日本語を含むコードスパンが
+    Inconsolata 等の等幅フォントは CJK 非対応のため，日本語を含むコードスパンが
     あると豆腐になる．バッククォートを除去してプロポーショナルフォント
-    （Hiragino 等）でレンダリングさせることで豆腐を防ぐ．
+    （IPAexMincho 等）でレンダリングさせることで豆腐を防ぐ．
 
     本文のみを受け取る前提（frontmatter は _split_frontmatter で除去済み）．
     表のセパレータ行（|---|---|）はスキップする．
@@ -379,67 +405,43 @@ def _tex_fix_table_columns(tex: str) -> str:
     )
 
 
-# ─── フォント DB ──────────────────────────────────────────────────────────────
+# ─── Docker イメージ管理 ──────────────────────────────────────────────────────
 
-def _writable_texmfvar() -> Path | None:
-    """書き込み可能な TEXMFVAR を返す.
-
-    デフォルトの TEXMFVAR が書き込める環境（MacTeX 等）では None を返し，
-    既存の設定をそのまま使う．Nix 等で書き込めない場合は $TMPDIR 下の
-    固定パスを返す．
-    """
-    existing = os.environ.get("TEXMFVAR", "")
-    if existing:
-        p = Path(existing)
-        if p.exists() and os.access(p, os.W_OK):
-            return None
-    fallback = Path(tempfile.gettempdir()) / "claude-lualatex-texmf-var"
-    fallback.mkdir(parents=True, exist_ok=True)
-    return fallback
-
-
-def _ensure_luaotfload_cache(texmf_var: Path) -> None:
-    """フォント DB が未構築なら luaotfload-tool で構築する.
-
-    同一セッション内では再構築しない（DB ファイルが存在すればスキップ）．
-    """
-    names_dir = texmf_var / "luatex-cache" / "generic" / "names"
-    if names_dir.exists() and any(names_dir.glob("luaotfload-names*.luc")):
-        return
-    env = {**os.environ, "TEXMFVAR": str(texmf_var)}
-    subprocess.run(
-        ["luaotfload-tool", "--update", "--force"],
-        env=env,
+def _ensure_docker_image() -> None:
+    """_DOCKER_IMAGE が未ビルドなら自動ビルドする（初回のみ時間がかかる）."""
+    r = subprocess.run(
+        ["docker", "image", "inspect", _DOCKER_IMAGE],
         capture_output=True,
-        timeout=120,
     )
+    if r.returncode == 0:
+        return
+    print(f"Building Docker image {_DOCKER_IMAGE} (初回のみ)...", file=sys.stderr)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        Path(tmpdir, "Dockerfile").write_text(_DOCKERFILE)
+        r2 = subprocess.run(["docker", "build", "-t", _DOCKER_IMAGE, tmpdir])
+        if r2.returncode != 0:
+            print("Error: Docker image のビルドに失敗しました。", file=sys.stderr)
+            sys.exit(1)
 
 
 # ─── レンダリング ─────────────────────────────────────────────────────────────
 
 def _render(md_file: str, pdf_file: str) -> None:
-    """pandoc + LuaLaTeX で PDF を生成する（Eisvogel テンプレート使用）."""
-    if not shutil.which("pandoc"):
+    """pandoc + LuaLaTeX で PDF を生成する（Docker 経由，Eisvogel テンプレート使用）."""
+    if not shutil.which("docker"):
         print(
-            "Error: pandoc が見つかりません。\n"
-            "  brew install pandoc でインストールしてください。",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    if not shutil.which("lualatex"):
-        print(
-            "Error: lualatex が見つかりません。\n"
-            "  brew install --cask mactex-no-gui でインストールしてください。",
+            "Error: docker が見つかりません。Docker Desktop をインストールしてください。",
             file=sys.stderr,
         )
         sys.exit(1)
     if not TEMPLATE_PATH.exists():
         print(
-            f"Error: Eisvogel テンプレートが見つかりません: {TEMPLATE_PATH}\n"
-            "  templates/eisvogel.latex が正しく配置されているか確認してください。",
+            f"Error: Eisvogel テンプレートが見つかりません: {TEMPLATE_PATH}",
             file=sys.stderr,
         )
         sys.exit(1)
+
+    _ensure_docker_image()
 
     md_path = Path(md_file).resolve()
     pdf_path = Path(pdf_file).resolve()
@@ -470,28 +472,37 @@ def _render(md_file: str, pdf_file: str) -> None:
     tmp_md.write_text(md_content, encoding="utf-8")
     header_file.write_text(_TABLE_HEADER_TEX, encoding="utf-8")
 
+    def _docker(args: list[str]) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [
+                "docker", "run", "--rm",
+                "-v", f"{work_dir}:{_CONTAINER_WORK}",
+                "-v", f"{PLUGIN_DIR}:{_CONTAINER_PLUGIN}:ro",
+                "-w", _CONTAINER_WORK,
+                _DOCKER_IMAGE,
+            ] + args,
+            capture_output=True, text=True,
+        )
+
     success = False
     try:
         # Step 1: pandoc で中間 .tex を生成
-        r1 = subprocess.run(
-            [
-                "pandoc", str(tmp_md),
-                "-o", str(tex_file),
-                "--pdf-engine=lualatex",
-                "-f", "markdown",
-                "-s",
-                "--template", str(TEMPLATE_PATH),
-                "-V", "mainfont=Hiragino Mincho ProN",
-                "-V", "sansfont=Hiragino Sans",
-                "-V", "monofont=Menlo",
-                "-V", "monofontoptions=Scale=MatchLowercase",
-                "-V", "footnotes-disable-backlinks=true",
-                "--highlight-style=tango",
-                "--include-in-header", str(header_file),
-                "--resource-path=.",
-            ],
-            capture_output=True, text=True, cwd=str(work_dir),
-        )
+        r1 = _docker([
+            "pandoc", tmp_md.name,
+            "-o", tex_file.name,
+            "--pdf-engine=lualatex",
+            "-f", "markdown",
+            "-s",
+            "--template", f"{_CONTAINER_PLUGIN}/eisvogel.latex",
+            "-V", "mainfont=IPAexMincho",
+            "-V", "sansfont=IPAexGothic",
+            "-V", "monofont=Latin Modern Mono",
+            "-V", "monofontoptions=Scale=MatchLowercase",
+            "-V", "footnotes-disable-backlinks=true",
+            "--highlight-style=tango",
+            "--include-in-header", header_file.name,
+            "--resource-path=.",
+        ])
         if r1.returncode != 0 or not tex_file.exists():
             print(f"Error: pandoc → .tex 失敗:\n{r1.stderr}", file=sys.stderr)
             sys.exit(1)
@@ -503,25 +514,13 @@ def _render(md_file: str, pdf_file: str) -> None:
         tex_file.write_text(tex_content, encoding="utf-8")
 
         # Step 3: lualatex を 2 回実行（相互参照解決）
-        # Nix 等で fontconfig のキャッシュ書き込み先がない場合に備え，
-        # TEXMFVAR を書き込み可能なディレクトリに向けてフォント DB を確保する．
-        texmf_var = _writable_texmfvar()
-        lualatex_env = os.environ.copy()
-        if texmf_var is not None:
-            _ensure_luaotfload_cache(texmf_var)
-            lualatex_env["TEXMFVAR"] = str(texmf_var)
-
         for _ in range(2):
-            r2 = subprocess.run(
-                [
-                    "lualatex",
-                    "-interaction=nonstopmode",
-                    f"-output-directory={work_dir}",
-                    str(tex_file),
-                ],
-                capture_output=True, text=True, cwd=str(work_dir),
-                env=lualatex_env,
-            )
+            r2 = _docker([
+                "lualatex",
+                "-interaction=nonstopmode",
+                "-output-directory=.",
+                tex_file.name,
+            ])
 
         out_pdf = tex_file.with_suffix(".pdf")
         if not out_pdf.exists():
@@ -539,6 +538,7 @@ def _render(md_file: str, pdf_file: str) -> None:
                 tex_file.with_suffix(".aux"),
                 tex_file.with_suffix(".log"),
                 tex_file.with_suffix(".out"),
+                tex_file.with_suffix(".toc"),
                 out_pdf_maybe,
             ]
         else:
@@ -548,6 +548,7 @@ def _render(md_file: str, pdf_file: str) -> None:
                 tex_file.with_suffix(".aux"),
                 tex_file.with_suffix(".log"),
                 tex_file.with_suffix(".out"),
+                tex_file.with_suffix(".toc"),
                 out_pdf_maybe,
             ]
         for f in targets:
