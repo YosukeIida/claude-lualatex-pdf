@@ -278,8 +278,8 @@ def _insert_cjk_linebreaks(text: str) -> str:
         if in_fence:
             result_lines.append(line)
             continue
-        # backtick スパンと $...$ インライン数式をスキップ
-        segments = re.split(r"(`[^`\n]+`|\$[^\$\n]+\$)", line)
+        # backtick スパン・$$...$$・$...$・\(...\) をスキップ
+        segments = re.split(r"(`[^`\n]+`|\$\$[^\$\n]+\$\$|\$[^\$\n]+\$|\\\(.*?\\\))", line)
         result_lines.append("".join(
             seg if idx % 2 == 1 else _process_segment(seg)
             for idx, seg in enumerate(segments)
